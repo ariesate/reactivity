@@ -1,0 +1,132 @@
+editor {
+    position: relative;
+    background: #282a36;
+    display: block;
+}
+
+/**
+common inline 中的样式
+ */
+program {
+    background: #282a36;
+    z-index: 100;
+    position: relative;
+    display: block;
+    padding: 0;
+    margin: 0;
+    color: #fff;
+    font-size: 14px;
+    letter-spacing: .1em;
+    font-family: "monospace";
+    cursor: text;
+}
+
+
+
+
+keyword {
+    color: #bd93f9;
+    font-style: italic;
+}
+
+
+boundary {
+    color: #8be9fd	;
+    //visibility: hidden;
+}
+
+
+// TODO 各种不同 operator
+operator{
+    margin: 0 .5em;
+    color: #8be9fd	;
+}
+
+operator[role="member"]{
+    margin: 0
+}
+
+separator + * {
+    margin-left: .5em;
+}
+
+function {
+    color: #1d84f0;
+}
+
+variable {
+    color: #f6f9d9;
+}
+
+// 参数
+identifier {
+    color: #ffb66a;
+}
+
+variable[role="callee"],
+variable[role="function.id"]{
+    color: #1d84f0;
+}
+
+/**
+base 控制换行的样式
+ */
+program * {
+    display: inline;
+    vertical-align: top;
+    white-space: nowrap;
+    line-height: 3ex;
+}
+
+block {
+    display: block;
+}
+
+childBlock {
+    display: block;
+    padding-left: 2em;
+}
+
+
+inline {
+    display: inline-block;
+}
+
+
+/*
+Expression
+*/
+[data-type="ThisExpression"] variable {
+    color: #f91825;
+}
+
+[data-type="AssignmentExpression"] operator {
+    color: #8be9fd;
+}
+
+[data-type="CallExpression"] {
+
+    & > container[data-name="arguments"] {
+    }
+
+    & > [data-type="MemberExpression"] {
+        & > identifier[data-name="property"] {
+            color: #677af0;
+        }
+    }
+}
+
+[data-type="MemberExpression"] {
+    & > identifier[data-name="property"] {
+        color: #ffffff;
+    }
+
+    & > variable {
+        color: #ffb66a;
+    }
+}
+
+
+block[data-type="FunctionDeclaration"],[data-type="ClassDeclaration"] {
+    margin: 1em 0;
+}
