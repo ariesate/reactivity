@@ -852,7 +852,7 @@ export const baseGenerator = {
   },
   NewExpression(node, state) {
     return (
-      <>
+      <inline>
         {makeKeyword('new')}
         {(EXPRESSIONS_PRECEDENCE[node.callee.type] <
           EXPRESSIONS_PRECEDENCE.CallExpression ||
@@ -867,7 +867,7 @@ export const baseGenerator = {
           boundaries: ParenthesisBoundary,
           children: addSeparatorToChildren(this.render('arguments'), ',')
         })}
-      </>
+      </inline>
     )
   },
   CallExpression(node, state) {

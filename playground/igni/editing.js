@@ -199,7 +199,7 @@ function splitTextNode(node, offset, splitAsPrev) {
     node.value.value = splitAsPrev ? node.value.value.slice(offset) : node.value.value.slice(0, offset)
 }
 
-function walkNodes(from, to, handle) {
+function forEachNodeInRange(from, to, handle) {
 
     /**
      * 以下几种情况：
@@ -269,7 +269,7 @@ export function formatRange(range, format) {
         startNode === endNode ? (endOffset - startOffset): endOffset
     )
     // 递归阅读并且 format
-    walkNodes(startNode, endNode, (node) => {
+    forEachNodeInRange(startNode, endNode, (node) => {
         if (!node.props.formats) {
             node.props.formats = format
         } else {

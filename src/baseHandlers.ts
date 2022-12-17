@@ -16,7 +16,7 @@ import {ITERATE_KEY, pauseTracking, resetTracking, track, trigger,} from './effe
 import {extend, hasChanged, hasOwn, isArray, isIntegerKey, isObject, isSymbol, makeMap} from '@vue/shared'
 import {isRef} from './ref'
 import {warn} from './warning'
-import {patchable} from "./patch";
+import {patchPoint} from "./patch";
 
 const isNonTrackableKeys = /*#__PURE__*/ makeMap(`__proto__,__v_isRef,__isVue`)
 
@@ -61,7 +61,7 @@ function createArrayInstrumentations() {
   // instrument length-altering mutation methods to avoid length being tracked
   // which leads to infinite loops in some cases (#2137)
   ;(['push', 'pop', 'shift', 'unshift', 'splice'] as const).forEach(key => {
-    instrumentations[key] = patchable(function (this: unknown[], ...args: unknown[]) {
+    instrumentations[key] = patchPoint(function (this: unknown[], ...args: unknown[]) {
       pauseTracking()
       const res = (toRaw(this) as any)[key].apply(this, args)
       resetTracking()

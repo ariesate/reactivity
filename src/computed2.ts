@@ -1,9 +1,5 @@
-import {clearCause, DebuggerOptions, ITERATE_KEY, pauseTracking, ReactiveEffect, resetTracking, track} from './effect'
-import { Ref, trackRefValue, triggerRefValue } from './ref'
-import { isFunction, NOOP } from '@vue/shared'
-import {ReactiveFlags, toRaw, reactive, toReactive} from './reactive'
-import { Dep } from './dep'
-import {TrackOpTypes} from "./operations";
+import { ReactiveEffect} from './effect'
+import {reactive } from './reactive'
 import {registerPatchFns, Cause} from "./patch";
 
 
@@ -19,7 +15,7 @@ export function replace(source: any, nextSourceValue: any) {
 }
 
 
-const computedToEffect = new WeakMap()
+export const computedToEffect = new WeakMap()
 
 function destroyComputed(c) {
   computedToEffect.get(c).stop()
@@ -31,7 +27,7 @@ function destroyComputed(c) {
 // recomputed? 不然一旦把后面的节点单独传出去，再去读的时候就不会触发 recompute 了？
 
 // 是否要深度传递叶子节点？
-export function computed2(getter: any, patchFn?: (...args: unknown[]) => any, dirtyCallback?: any) {
+export function computed2(getter: any, registerPatchFn?: (...args: unknown[]) => any, dirtyCallback?: any) {
   // 要自动推断类型？
   // effect 就是为 getter 注册一个 schedule 函数。
   // 1. 如果不在创建的时候就执行，就没办法做到自动推断类型。返回的 proxy 的 target 就会有问题。
@@ -44,7 +40,7 @@ export function computed2(getter: any, patchFn?: (...args: unknown[]) => any, di
   function effectRun() {
     if (!reactiveData) {
       reactiveData = reactive(getter())
-    } else if (patchFn && isPatchable) {
+    } else if (registerPatchFn && isPatchable) {
       // CAUTION 会清空 triggerCause
       console.log('run patch')
       applyPatch(reactiveData)
@@ -55,15 +51,16 @@ export function computed2(getter: any, patchFn?: (...args: unknown[]) => any, di
     isPatchable = true
   }
 
-  const effect = new ReactiveEffect(effectRun, (cause, debugInfo) => {
+  const thisEffect = new ReactiveEffect(effectRun, (cause, debugInfo) => {
     isDirty = true
     console.log("effect trigger", cause)
     // 只记录写了 patch 但是没走 patch 的。
-    if(patchFn) {
+    if(registerPatchFn) {
       // patchable 方法必然有 cause，如果由不是 patch 监听的方法触发的变化，就说明当前的变化不能 patch。
       console.log('dirty, prev isPatchable:', isPatchable, cause)
       if (!cause) debugger
-      // 收集到 cause 和自己注册的不匹配，也不能 patch
+      // 在触发之前，所有 patchPoint 都会先通知一下相关的 computed 开始收集了。
+      // 如果当前 cause 不是自己注册了 patchPoint 的，那么就不能走 patch 了。
       isPatchable = isPatchable && (!!cause) && (getCauses(thisComputed)?.at(-1) === cause)
       if (!isPatchable) {
         debugger
@@ -76,13 +73,18 @@ export function computed2(getter: any, patchFn?: (...args: unknown[]) => any, di
 
 
   // 立刻 run，建立 reactiveData 和 effect
-  effect.run()
+  thisEffect.run()
 
   const thisComputed = new Proxy(reactiveData, {
     get(target, key, receiver) {
       // 获取任何值得时候 check dirty
       if (isDirty) {
-        effect.run()
+        // CAUTION 必须在 run 之前判断自己能不能开启 patchMode 啊，因为此时
+        if(isPatchable) {
+          thisEffect.patchMode = true
+        }
+        thisEffect.run()
+        thisEffect.patchMode = false
         isDirty = false
       }
 
@@ -90,14 +92,12 @@ export function computed2(getter: any, patchFn?: (...args: unknown[]) => any, di
     }
   })
 
-  computedToEffect.set(thisComputed, effect)
+  computedToEffect.set(thisComputed, thisEffect)
 
   // 如果有 patchFn，要执行注册一下针对每个变化的操作。
-  applyPatch = patchFn ? registerPatchFns(thisComputed, patchFn) : undefined
-
+  applyPatch = registerPatchFn ? registerPatchFns(thisComputed, registerPatchFn) : undefined
   return thisComputed
 }
-
 
 
 const patchCauses = new WeakMap()
@@ -122,13 +122,14 @@ export function clearCauses(computed: any) {
 }
 
 
-export function autorun(run, patchFn) {
+export function autorun(run, registerPatchFn) {
   const result = computed2(() => {
     return {
       name: run.name,
-      token: run()
+      token: run(),
+      timestamp: Date.now()
     }
-  }, patchFn, () => {
+  }, registerPatchFn, () => {
     Promise.resolve().then(() => {
       result.token
     })

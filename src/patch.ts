@@ -1,6 +1,6 @@
 
-import {trackCause, clearCause, stopTrackCause, getCause} from "./effect";
-import {clearCauses, collectCause, getCauses} from "./computed2";
+import {trackCause, stopTrackCause, createTrackFrame} from "./effect";
+import {autorun, clearCauses, collectCause, computed2, computedToEffect, getCauses} from "./computed2";
 
 
 export type Cause = [Function, unknown[], unknown]
@@ -9,7 +9,9 @@ export type Cause = [Function, unknown[], unknown]
 // n级索引，一级是 method，二级是 comptued 对应的 this/参数, 三级是 computed, 四级是面的所有 patchFn
 const patchFnsByMethod = new WeakMap()
 
-export function patchable(fn: (...argv: unknown[]) => any, indexNos?: any) {
+// CAUTION 一定要实现，不然可能有内存泄漏
+// TODO 如果有个一个 computed，一直不读，那么cause 里存的 args 等信息就会一直堆积，产生类似于内存泄漏的问题。
+export function patchPoint(fn: (...argv: unknown[]) => any, indexNos?: any) {
     const patchedFn = function(this: unknown[], ...args: unknown[]) {
         let relatedComputeds
         if (!indexNos) {
@@ -20,21 +22,22 @@ export function patchable(fn: (...argv: unknown[]) => any, indexNos?: any) {
         }
 
         // 忽略在执行期间，数据变化对当前 computed 产生的 trigger。直接 set dirty. 并告知 引起变化的 Causes。
-        const cause: Cause = [patchedFn, args, indexNos || this]
+        const cause: Cause = [patchedFn, args, this]
 
         if (relatedComputeds) {
             for(let computed of relatedComputeds) {
-                console.log('collect cause', computed, cause)
+                // console.log('collect cause', computed, cause)
                 collectCause(computed, cause)
             }
         } else {
             // debugger
         }
-
         // 这个 trackCause 是因为 函数执行的时候还是会正常引起 effect 变换。effect 可以根据有没有这个值来判断是不是全部都能走 patch fn。
         trackCause(cause)
         // 为什么不在这里再去通知 computed? 因为 fn.apply 里面可能会触发能多次通知，但其实都是因为这同一次操作引起的。
-        fn.apply(this, args)
+        const patchPointResult = fn.apply(this, args)
+        // 这里记录下是因为在处理 iterate 对象时可能需要根据 return 值来判断到底哪些节点丢掉了不需要要track，哪些是新增的。
+        cause.push(patchPointResult)
         stopTrackCause()
     }
 
@@ -46,34 +49,37 @@ export function patchable(fn: (...argv: unknown[]) => any, indexNos?: any) {
 
 
 // TODO 对 set 的监听？？？
-
-export function registerPatchFns(thisComputed: any, createComputedPatchFns: Function) {
-
-    function on(method: Function, indexes, patchFn: Function) {
-
-        const computedToPatchFn = getFromWeakMapTree(patchFnsByMethod, ([method]).concat(indexes), () =>  new Map())
+export function registerPatchFns(thisComputed: any, registerPatchFnsOnComputed: Function) {
+    const effect = computedToEffect.get(thisComputed)
+    // 注册要监听的 patchPoint
+    function on(patchPoint: Function, indexes, patchFn: Function) {
+        const computedToPatchFn = getFromWeakMapTree(patchFnsByMethod, ([patchPoint]).concat(indexes), () =>  new Map())
         computedToPatchFn.set(thisComputed, patchFn)
     }
 
-    // 什么也不做，执行一下 fn 就是为了读一下相应的 key，来增加 dep 的。
-    function track(fn) {
+    // 把 fn 执行中的所有 dep 都增量收集到当前的 this.Computed 上
+    function addTrack(fn) {
+        console.log(999)
+        // 此时肯定已经是在当前 computed 重新 run 的过程中了，直接执行函数收集就行
+        if(!effect.patchMode) throw new Error('not in patch mode')
         fn()
     }
 
-    // TODO !!!
-    function untrack(dep, key) {
-
+    function untrack(deps) {
+        console.log(222, deps)
+        effect.untrack(deps)
     }
 
     // 注册一下所有的 patchFn
-    createComputedPatchFns({ on, track, untrack })
+    registerPatchFnsOnComputed({ on, addTrack, untrack })
 
+    // 当重新计算 thisComputed 的时候，thisComputed 会根据当前能不能走 patch 来决定是否调用 applyPatch。
     return function applyPatch(lastResult: any) {
-        getCauses(thisComputed)?.forEach(([method, argv, target]) => {
+        getCauses(thisComputed)?.forEach(([patchPoint, argv, target, patchPointResult]) => {
             // 方法没有指定 indexNos，说明这是某个对象的方法，直接用对象做索引的，这是和上面的约定。
-            const indexes = method.indexNos?.map((no: any) => argv[no]) || [target]
-            const callback = getFromWeakMapTree(patchFnsByMethod, ([method]).concat(indexes))?.get(thisComputed)
-            callback(argv, lastResult)
+            const indexes = patchPoint.indexNos?.map((no: any) => argv[no]) || [target]
+            const callback = getFromWeakMapTree(patchFnsByMethod, ([patchPoint]).concat(indexes))?.get(thisComputed)
+            callback(argv, lastResult, patchPointResult)
         })
 
         // 消耗掉 causes
@@ -95,3 +101,83 @@ function getFromWeakMapTree(root: WeakMap<any, any>, indexes: any[], createDefau
     })
     return base
 }
+
+
+/**
+ * 针对 collection 的 forEach 和 map computed 的 patch utils。
+ * 自动进行了新增节点和删除节点的 track/untrack
+ *
+ * 如果是自定义对象，要求对象必须实现 iterate(start, end) 方法。用来实现新增 track。
+ * 要求所有 mutate 方法必须告诉框架新插入的节点是？删除的节点是？这样才能做到 track/untrack。
+ */
+function iterateWithTrackInfo(collection, fromTo = [], handle, trackInfoCallback) {
+    const trackFrame = createTrackFrame()
+
+    const { next } = collection.iterator(fromTo[0], fromTo[1])
+    let iterateDone = false
+    while(!iterateDone) {
+        trackFrame.start()
+        let { value: item, done} = next()
+        // 可能以上来就是 done，这时 value 是 undefined
+        if(item !== undefined) {
+            handle(item)
+            trackInfoCallback(item, trackFrame.end())
+        }
+        iterateDone = done
+    }
+}
+
+// TODO 改成自动根据 collection class method 来 patch
+export function autorunForEach(collection, patchPoints = [], handle: Function, handleRemoved: Function) {
+    const itemToTrackDeps = new WeakMap()
+    const trackInfoCallback = (item, deps) => itemToTrackDeps.set(item, deps)
+
+    const result = computed2(function createAutoForEach() {
+        iterateWithTrackInfo(collection, undefined, handle, trackInfoCallback)
+        return {
+            collection,
+            timestamp: Date.now()
+        }
+    }, ({ on, addTrack, untrack }) => {
+        // 自动找就行了
+        patchPoints.forEach(patchPoint => {
+            on(patchPoint, [collection], (argv, lastResult, patchPointResult) => {
+                // 自动 track/untrack。这里要求这个 patchPoint 执行完 mutate 之后必须告诉外部新增和删除的节点？
+                // 任何 patchPointMutate 方法必须返回 { added: {from: to}, removed: {from, to}}
+                console.log(1, patchPointResult)
+                if (patchPointResult.added) {
+                    addTrack(() => iterateWithTrackInfo(collection, [patchPointResult.added.from, patchPointResult.added.to], handle, trackInfoCallback))
+                }
+
+                if (patchPointResult.removed) {
+                    collection.iterate(patchPointResult.added.from, patchPointResult.added.to, (item) => {
+                        handleRemoved(item)
+                        untrack(itemToTrackDeps.get(item))
+                    })
+                }
+            })
+        })
+    }, () => {
+        Promise.resolve().then(() => {
+            // 读一下就会触发重新计算
+            result.token
+        })
+    })
+    return result
+}
+
+export function collectionPatchPoint(method, indexNos) {
+    const result = patchPoint(method, indexNos)
+    result.isCollectionPatchPoint = true
+    return result
+}
+
+
+// TODO mapComputed 针对数组、对象等，也是自动 patch
+export function mapComputed(collection) {
+
+}
+
+
+
+

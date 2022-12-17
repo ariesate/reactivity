@@ -52,6 +52,7 @@ export const MAP_KEY_ITERATE_KEY = Symbol(__DEV__ ? 'Map key iterate' : '')
 
 export class ReactiveEffect<T = any> {
   active = true
+  patchMode = false
   deps: Dep[] = []
   parent: ReactiveEffect | undefined = undefined
 
@@ -82,7 +83,7 @@ export class ReactiveEffect<T = any> {
   ) {
     recordEffectScope(this, scope)
   }
-
+  // 用来增加 track 的
   run() {
     if (!this.active) {
       return this.fn()
@@ -102,15 +103,20 @@ export class ReactiveEffect<T = any> {
 
       trackOpBit = 1 << ++effectTrackDepth
 
-      if (effectTrackDepth <= maxMarkerBits) {
-        initDepMarkers(this)
-      } else {
-        cleanupEffect(this)
+      if (!this.patchMode) {
+        if (effectTrackDepth <= maxMarkerBits) {
+          initDepMarkers(this)
+        } else {
+          cleanupEffect(this)
+        }
       }
+
       return this.fn()
     } finally {
-      if (effectTrackDepth <= maxMarkerBits) {
-        finalizeDepMarkers(this)
+      if (!this.patchMode) {
+        if (effectTrackDepth <= maxMarkerBits) {
+          finalizeDepMarkers(this)
+        }
       }
 
       trackOpBit = 1 << --effectTrackDepth
@@ -124,7 +130,6 @@ export class ReactiveEffect<T = any> {
       }
     }
   }
-  // TODO 一定要增加 patch 的实现，不然还是会需要遍历来获取 key
   stop() {
     // stopped while running itself - defer the cleanup
     if (activeEffect === this) {
@@ -137,9 +142,31 @@ export class ReactiveEffect<T = any> {
       this.active = false
     }
   }
+  untrack(deps) {
+    // TODO 是不是改成 Set 比较好
+    deps.forEach(dep => {
+      const index = this.deps.indexOf(dep)
+      if (index!== -1) this.deps.splice(index, 1)
+    })
+  }
 }
 
-function cleanupEffect(effect: ReactiveEffect) {
+const frameStack = []
+export function createTrackFrame() {
+  return {
+    start() {
+      frameStack.push(this)
+    },
+    deps: [],
+    end() {
+      if (frameStack.at(-1) !== this) throw new Error('not your frame')
+      frameStack.pop()
+    }
+  }
+}
+
+
+export function cleanupEffect(effect: ReactiveEffect) {
   const { deps } = effect
   if (deps.length) {
     for (let i = 0; i < deps.length; i++) {
@@ -247,6 +274,7 @@ export function trackEffects(
   if (shouldTrack) {
     dep.add(activeEffect!)
     activeEffect!.deps.push(dep)
+    if (frameStack.length) frameStack.at(-1).deps.push(dep)
     if (__DEV__ && activeEffect!.onTrack) {
       activeEffect!.onTrack({
         effect: activeEffect!,

@@ -68,4 +68,4 @@ export {
 export { TrackOpTypes, TriggerOpTypes } from './operations'
 
 export { computed2, autorun } from './computed2'
-export { patchable } from './patch'
+export { patchPoint, collectionPatchPoint, autorunForEach } from './patch'

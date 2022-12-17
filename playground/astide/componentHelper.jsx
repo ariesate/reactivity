@@ -18,7 +18,7 @@ export function makeKeyword(name, leftSpace) {
 }
 
 export function makeBlock({ Tag, keyword, variable, boundaries, children, next, semicolon, block, isChild, nextChildBlock }) {
-  const RealTag = Tag || (block ?  (isChild ? 'childBlock' : 'block') : 'inline')
+  const RealTag = Tag || (block ?  (isChild ? 'childBlock' : 'block') : 'frag')
   return (
     <RealTag>
       {keyword ? Array.isArray(keyword) ? (keyword.map(k =>makeKeyword(k))) : makeKeyword(keyword) : null}
