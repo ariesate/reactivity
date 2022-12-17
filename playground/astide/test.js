@@ -1,6 +1,10 @@
 import {findNodeFromElement} from "./editing";
 import {reactive, shallowRef, ref} from "../../dist/reactivity.esm.js";
 
+const readerAuth = new AuthTable([])
+const authDeadline = new Date()
+
+var doc = ''
 
 function matchChar(str, offset, toMatch, endOffset = toMatch.length - 1) {
     if (!toMatch) return []
