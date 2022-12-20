@@ -1,6 +1,7 @@
 
 import {trackCause, stopTrackCause, createTrackFrame} from "./effect";
 import {autorun, clearCauses, collectCause, computed2, computedToEffect, getCauses} from "./computed2";
+import { Dep } from "./dep";
 
 
 export type Cause = [Function, unknown[], unknown]
@@ -9,10 +10,19 @@ export type Cause = [Function, unknown[], unknown]
 // n级索引，一级是 method，二级是 comptued 对应的 this/参数, 三级是 computed, 四级是面的所有 patchFn
 const patchFnsByMethod = new WeakMap()
 
+let pausePatchPoint = false
+export function disablePatch(fn: Function) {
+    pausePatchPoint = true
+    fn()
+    pausePatchPoint = false
+}
+
 // CAUTION 一定要实现，不然可能有内存泄漏
 // TODO 如果有个一个 computed，一直不读，那么cause 里存的 args 等信息就会一直堆积，产生类似于内存泄漏的问题。
-export function patchPoint(fn: (...argv: unknown[]) => any, indexNos?: any) {
+export function patchPoint(fn: Function, indexNos?: any) {
     const patchedFn = function(this: unknown[], ...args: unknown[]) {
+        if (pausePatchPoint) return fn()
+
         let relatedComputeds
         if (!indexNos) {
             relatedComputeds = patchFnsByMethod.get(patchedFn)?.get(this)?.keys()
@@ -36,9 +46,12 @@ export function patchPoint(fn: (...argv: unknown[]) => any, indexNos?: any) {
         trackCause(cause)
         // 为什么不在这里再去通知 computed? 因为 fn.apply 里面可能会触发能多次通知，但其实都是因为这同一次操作引起的。
         const patchPointResult = fn.apply(this, args)
+        if (patchPointResult.added && !patchPointResult.added?.from.next) debugger
         // 这里记录下是因为在处理 iterate 对象时可能需要根据 return 值来判断到底哪些节点丢掉了不需要要track，哪些是新增的。
         cause.push(patchPointResult)
         stopTrackCause()
+
+        return patchPointResult
     }
 
     patchedFn.indexNos = indexNos
@@ -58,14 +71,14 @@ export function registerPatchFns(thisComputed: any, registerPatchFnsOnComputed: 
     }
 
     // 把 fn 执行中的所有 dep 都增量收集到当前的 this.Computed 上
-    function addTrack(fn) {
+    function addTrack(fn: Function) {
         console.log(999)
         // 此时肯定已经是在当前 computed 重新 run 的过程中了，直接执行函数收集就行
         if(!effect.patchMode) throw new Error('not in patch mode')
         fn()
     }
 
-    function untrack(deps) {
+    function untrack(deps: Dep[]) {
         console.log(222, deps)
         effect.untrack(deps)
     }
@@ -127,10 +140,24 @@ function iterateWithTrackInfo(collection, fromTo = [], handle, trackInfoCallback
     }
 }
 
+
+type PatchPointResult = {
+    added? : {
+        from? : Object,
+        to? : Object,
+    },
+    removed? : {
+        from? : Object,
+        to? : Object,
+    }
+}
+
 // TODO 改成自动根据 collection class method 来 patch
-export function autorunForEach(collection, patchPoints = [], handle: Function, handleRemoved: Function) {
+export function autorunForEach(collection, patchPoints = [], handle: Function, handleRemoved: Function, schedule: Function) {
     const itemToTrackDeps = new WeakMap()
-    const trackInfoCallback = (item, deps) => itemToTrackDeps.set(item, deps)
+    const trackInfoCallback = (item: Object, deps: Dep[]) => itemToTrackDeps.set(item, deps)
+
+    const updateThis = () => result.timestamp
 
     const result = computed2(function createAutoForEach() {
         iterateWithTrackInfo(collection, undefined, handle, trackInfoCallback)
@@ -141,33 +168,33 @@ export function autorunForEach(collection, patchPoints = [], handle: Function, h
     }, ({ on, addTrack, untrack }) => {
         // 自动找就行了
         patchPoints.forEach(patchPoint => {
-            on(patchPoint, [collection], (argv, lastResult, patchPointResult) => {
+            on(patchPoint, [collection], (argv: any[], lastResult: any, patchPointResult: PatchPointResult) => {
                 // 自动 track/untrack。这里要求这个 patchPoint 执行完 mutate 之后必须告诉外部新增和删除的节点？
                 // 任何 patchPointMutate 方法必须返回 { added: {from: to}, removed: {from, to}}
-                console.log(1, patchPointResult)
                 if (patchPointResult.added) {
                     addTrack(() => iterateWithTrackInfo(collection, [patchPointResult.added.from, patchPointResult.added.to], handle, trackInfoCallback))
                 }
 
                 if (patchPointResult.removed) {
-                    collection.iterate(patchPointResult.added.from, patchPointResult.added.to, (item) => {
+                    // 注意这里，因为 iterator 是从第一个参数的 next 读起的，不会读第一个参数，所以要这样处理。
+                    const removeStart = { next: patchPointResult.removed.from }
+                    collection.constructor.iterate(removeStart, patchPointResult.removed.to, (item) => {
                         handleRemoved(item)
+                        if (!itemToTrackDeps.get(item)) debugger
                         untrack(itemToTrackDeps.get(item))
                     })
                 }
             })
         })
     }, () => {
-        Promise.resolve().then(() => {
-            // 读一下就会触发重新计算
-            result.token
-        })
+        schedule && schedule(updateThis)
     })
     return result
 }
 
-export function collectionPatchPoint(method, indexNos) {
+export function collectionPatchPoint(method: Function, indexNos) {
     const result = patchPoint(method, indexNos)
+    // @ts-ignore
     result.isCollectionPatchPoint = true
     return result
 }

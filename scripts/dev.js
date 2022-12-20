@@ -49,7 +49,7 @@ if (!inlineDeps) {
     ]
   }
 }
-console.log(args.f)
+
 build({
   entryPoints: [resolve(__dirname, `../src/index.ts`)],
   outfile,

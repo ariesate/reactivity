@@ -18,8 +18,7 @@
     "jsx": "preserve",
     "lib": ["esnext", "dom"],
     "types": ["jest", "node"],
-    "rootDir": ".",
-    "isolatedModules": true
+    "rootDir": "."
   },
   "include": [
     "global.d.ts",
