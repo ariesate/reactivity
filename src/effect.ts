@@ -142,7 +142,7 @@ export class ReactiveEffect<T = any> {
       this.active = false
     }
   }
-  untrack(deps) {
+  untrack(deps: Dep[]) {
     // TODO 是不是改成 Set 比较好
     deps.forEach(dep => {
       const index = this.deps.indexOf(dep)
@@ -151,8 +151,14 @@ export class ReactiveEffect<T = any> {
   }
 }
 
-const frameStack = []
-export function createTrackFrame() {
+
+type TrackFrame = {
+  start: Function,
+  deps: Dep[],
+  end: Function
+}
+const frameStack: TrackFrame[] = []
+export function createTrackFrame() : TrackFrame {
   return {
     start() {
       frameStack.push(this)
@@ -161,6 +167,7 @@ export function createTrackFrame() {
     end() {
       if (frameStack.at(-1) !== this) throw new Error('not your frame')
       frameStack.pop()
+      return this.deps
     }
   }
 }
@@ -274,7 +281,7 @@ export function trackEffects(
   if (shouldTrack) {
     dep.add(activeEffect!)
     activeEffect!.deps.push(dep)
-    if (frameStack.length) frameStack.at(-1).deps.push(dep)
+    if (frameStack.length) frameStack.at(-1)!.deps.push(dep)
     if (__DEV__ && activeEffect!.onTrack) {
       activeEffect!.onTrack({
         effect: activeEffect!,
