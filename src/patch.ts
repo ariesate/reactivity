@@ -1,6 +1,6 @@
 
 import {trackCause, stopTrackCause, createTrackFrame} from "./effect";
-import {autorun, clearCauses, collectCause, computed2, computedToEffect, getCauses} from "./computed2";
+import {autorun, clearCauses, collectCause, computed2, computedToEffect, destroyComputed, getCauses} from "./computed2";
 import { Dep } from "./dep";
 
 
@@ -46,7 +46,7 @@ export function patchPoint(fn: Function, indexNos?: any) {
         trackCause(cause)
         // 为什么不在这里再去通知 computed? 因为 fn.apply 里面可能会触发能多次通知，但其实都是因为这同一次操作引起的。
         const patchPointResult = fn.apply(this, args)
-        if (patchPointResult.added && !patchPointResult.added?.from.next) debugger
+        // if (patchPointResult.added && !patchPteraointResult.added?.from.next) debugger
         // 这里记录下是因为在处理 iterate 对象时可能需要根据 return 值来判断到底哪些节点丢掉了不需要要track，哪些是新增的。
         cause.push(patchPointResult)
         stopTrackCause()
@@ -116,6 +116,10 @@ function getFromWeakMapTree(root: WeakMap<any, any>, indexes: any[], createDefau
 }
 
 
+type CollectionType = {
+    iterator: (from: any, to: any) => { next: () => { value: any, done : boolean} }
+}
+
 /**
  * 针对 collection 的 forEach 和 map computed 的 patch utils。
  * 自动进行了新增节点和删除节点的 track/untrack
@@ -123,7 +127,7 @@ function getFromWeakMapTree(root: WeakMap<any, any>, indexes: any[], createDefau
  * 如果是自定义对象，要求对象必须实现 iterate(start, end) 方法。用来实现新增 track。
  * 要求所有 mutate 方法必须告诉框架新插入的节点是？删除的节点是？这样才能做到 track/untrack。
  */
-function iterateWithTrackInfo(collection, fromTo = [], handle, trackInfoCallback) {
+function iterateWithTrackInfo(collection: CollectionType, fromTo = [], handle: Function, trackInfoCallback: Function) {
     const trackFrame = createTrackFrame()
 
     const { next } = collection.iterator(fromTo[0], fromTo[1])
@@ -131,10 +135,12 @@ function iterateWithTrackInfo(collection, fromTo = [], handle, trackInfoCallback
     while(!iterateDone) {
         trackFrame.start()
         let { value: item, done} = next()
-        // 可能以上来就是 done，这时 value 是 undefined
+        // 可能一上来就是 done，这时 value 是 undefined
         if(item !== undefined) {
             handle(item)
             trackInfoCallback(item, trackFrame.end())
+        } else {
+            trackFrame.end()
         }
         iterateDone = done
     }
@@ -153,7 +159,8 @@ type PatchPointResult = {
 }
 
 // TODO 改成自动根据 collection class method 来 patch
-export function autorunForEach(collection, patchPoints = [], handle: Function, handleRemoved: Function, schedule: Function) {
+let uuid = 0
+export function autorunForEach(collection: CollectionType, patchPoints = [], handle: Function, handleRemoved: Function, schedule: Function, callbacks = {}) {
     const itemToTrackDeps = new WeakMap()
     const trackInfoCallback = (item: Object, deps: Dep[]) => itemToTrackDeps.set(item, deps)
 
@@ -163,7 +170,7 @@ export function autorunForEach(collection, patchPoints = [], handle: Function, h
         iterateWithTrackInfo(collection, undefined, handle, trackInfoCallback)
         return {
             collection,
-            timestamp: Date.now()
+            timestamp: ++uuid
         }
     }, ({ on, addTrack, untrack }) => {
         // 自动找就行了
@@ -178,7 +185,7 @@ export function autorunForEach(collection, patchPoints = [], handle: Function, h
                 if (patchPointResult.removed) {
                     // 注意这里，因为 iterator 是从第一个参数的 next 读起的，不会读第一个参数，所以要这样处理。
                     const removeStart = { next: patchPointResult.removed.from }
-                    collection.constructor.iterate(removeStart, patchPointResult.removed.to, (item) => {
+                    collection.constructor.iterate(removeStart, patchPointResult.removed.to, (item: any) => {
                         handleRemoved(item)
                         if (!itemToTrackDeps.get(item)) debugger
                         untrack(itemToTrackDeps.get(item))
@@ -188,8 +195,11 @@ export function autorunForEach(collection, patchPoints = [], handle: Function, h
         })
     }, () => {
         schedule && schedule(updateThis)
-    })
-    return result
+    }, callbacks)
+
+    return function stop() {
+        destroyComputed(result)
+    }
 }
 
 export function collectionPatchPoint(method: Function, indexNos) {
