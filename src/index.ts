@@ -67,5 +67,5 @@ export {
 } from './effectScope'
 export { TrackOpTypes, TriggerOpTypes } from './operations'
 
-export { computed2, autorun } from './computed2'
-export { patchPoint, collectionPatchPoint, autorunForEach, disablePatch } from './patch'
+export { patchableComputed, autorun } from './patchableComputed'
+export { patchPoint, collectionPatchPoint, autorunForEach, disablePatch, addAfterPatchPointerCallback } from './patch'

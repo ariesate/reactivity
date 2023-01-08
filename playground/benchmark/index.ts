@@ -11,7 +11,7 @@ function mapTo$Str(i) {
 
 console.time('build computed')
 const computedArr2 = computed2(() => {
-    console.log('computed2')
+    console.log('patchableComputed')
     return arr2.map(mapTo$Str)
 }, ({ on }) => {
     (['unshift', 'push']).forEach((method) => {
