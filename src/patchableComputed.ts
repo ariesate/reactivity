@@ -1,6 +1,6 @@
 import { ReactiveEffect} from './effect'
 import {reactive } from './reactive'
-import {registerPatchFns, Cause} from "./patch";
+import {registerPatchFns, Cause, addAfterPatchPointerCallback, inAfterPatchPointerFrame} from "./patch";
 
 
 export function replace(source: any, nextSourceValue: any) {
@@ -15,26 +15,32 @@ export function replace(source: any, nextSourceValue: any) {
 }
 
 
-export const computedToEffect = new WeakMap()
+export const computedToEffect = new WeakMap<any, ReactiveEffect>()
 
-export function destroyComputed(c) {
-  computedToEffect.get(c).stop()
+export function destroyComputed(c: any) {
+  computedToEffect.get(c)!.stop()
 }
 
 
 
+export type RegisterPatchFnType = ({ on, addTrack, untrack } : {on: Function, addTrack: Function, untrack: Function}) => any
+
+type CallbacksType = {
+  onRecompute? : Function,
+  onPatch? : Function
+}
 // 好像要穿件深度 proxy 把对后续节点的读取全都代理到这个跟对像的读才能区博爱这个 computed 的任意节点别订阅都会触发
 // recomputed? 不然一旦把后面的节点单独传出去，再去读的时候就不会触发 recompute 了？
 
 // 是否要深度传递叶子节点？
-export function computed2(getter: any, registerPatchFn?: ({ on, addTrack, untrack } : {on: Function, addTrack: Function, untrack: Function}) => any, dirtyCallback?: any, callbacks?) {
+export function patchableComputed(getter: () => Object, registerPatchFn?: RegisterPatchFnType, dirtyCallback?: any, callbacks? : CallbacksType) {
   // 要自动推断类型？
   // effect 就是为 getter 注册一个 schedule 函数。
   // 1. 如果不在创建的时候就执行，就没办法做到自动推断类型。返回的 proxy 的 target 就会有问题。
   let isDirty = false
-  let isPatchable = true
-  let applyPatch
-  let reactiveData
+  let isPatchable = !!registerPatchFn
+  let applyPatch: Function|undefined
+  let reactiveData: Object
 
 
   function effectRun() {
@@ -43,7 +49,7 @@ export function computed2(getter: any, registerPatchFn?: ({ on, addTrack, untrac
     } else if (registerPatchFn && isPatchable) {
       // CAUTION 会清空 triggerCause
       // console.log('run patch')
-      applyPatch(reactiveData)
+      applyPatch!(reactiveData)
       callbacks?.onPatch && callbacks?.onPatch(reactiveData)
     } else {
       // TODO check dep?
@@ -70,26 +76,42 @@ export function computed2(getter: any, registerPatchFn?: ({ on, addTrack, untrac
       }
     }
 
-    dirtyCallback && dirtyCallback()
-  })
+    // CAUTION 这里要限制一下，如果要用，addAfterPatchPointerCallback 只能马上使用。不然注册的 callback frame 就不正确了。
+    let isImmediateUpdateExpired = false
+    if (dirtyCallback) {
+      dirtyCallback(function immediateUpdate() {
+        if (isImmediateUpdateExpired) throw new Error('immediateUpdate expired')
+        if (inAfterPatchPointerFrame()) {
+          addAfterPatchPointerCallback(recompute)
+        } else {
+          Promise.resolve().then(recompute)
+        }
+      })
+    }
 
+    isImmediateUpdateExpired = true
+  })
 
   // 立刻 run，建立 reactiveData 和 effect
   thisEffect.run()
 
-  const thisComputed = new Proxy(reactiveData, {
+  const recompute = () => {
+    if (isDirty) {
+      // CAUTION 必须在 run 之前判断自己能不能开启 patchMode 啊，因为此时
+      if(isPatchable) {
+        thisEffect.patchMode = true
+      }
+      thisEffect.run()
+      thisEffect.patchMode = false
+      isDirty = false
+    }
+  }
+
+  const thisComputed = new Proxy(reactiveData!, {
     get(target, key, receiver) {
       // 获取任何值得时候 check dirty
-      if (isDirty) {
-        // CAUTION 必须在 run 之前判断自己能不能开启 patchMode 啊，因为此时
-        if(isPatchable) {
-          thisEffect.patchMode = true
-        }
-        thisEffect.run()
-        thisEffect.patchMode = false
-        isDirty = false
-      }
-
+      recompute()
+      // @ts-ignore
       return target[key]
     }
   })
@@ -125,16 +147,16 @@ export function clearCauses(computed: any) {
 
 let uuid = 0
 
-export function autorun(run, registerPatchFn, schedule) {
-  const updateThis = () => result.token
-  const result = computed2(() => {
+export function autorun(run: Function, registerPatchFn: RegisterPatchFnType, schedule: Function) {
+  // @ts-ignore
+  const result: {name: string, token: any, timestamp: any} = patchableComputed(() => {
     return {
       name: run.name,
       token: run(),
       timestamp: ++uuid
     }
-  }, registerPatchFn, () => {
-    schedule && schedule(updateThis)
+  }, registerPatchFn, (immediateUpdate: Function) => {
+    schedule && schedule(immediateUpdate)
   })
 
   return function stop() {
