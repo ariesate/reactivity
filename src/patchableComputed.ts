@@ -147,7 +147,7 @@ export function clearCauses(computed: any) {
 
 let uuid = 0
 
-export function autorun(run: Function, registerPatchFn: RegisterPatchFnType, schedule: Function) {
+export function autorun(run: Function, registerPatchFn?: RegisterPatchFnType, schedule?: Function) {
   // @ts-ignore
   const result: {name: string, token: any, timestamp: any} = patchableComputed(() => {
     return {
@@ -156,7 +156,11 @@ export function autorun(run: Function, registerPatchFn: RegisterPatchFnType, sch
       timestamp: ++uuid
     }
   }, registerPatchFn, (immediateUpdate: Function) => {
-    schedule && schedule(immediateUpdate)
+    if (schedule) {
+      schedule(immediateUpdate)
+    } else {
+      immediateUpdate()
+    }
   })
 
   return function stop() {
