@@ -27,7 +27,8 @@ export type RegisterPatchFnType = ({ on, addTrack, untrack } : {on: Function, ad
 
 type CallbacksType = {
   onRecompute? : Function,
-  onPatch? : Function
+  onPatch? : Function,
+  onTrack? : ReactiveEffect["onTrack"],
 }
 // 好像要穿件深度 proxy 把对后续节点的读取全都代理到这个跟对像的读才能区博爱这个 computed 的任意节点别订阅都会触发
 // recomputed? 不然一旦把后面的节点单独传出去，再去读的时候就不会触发 recompute 了？
@@ -91,6 +92,8 @@ export function patchableComputed(getter: () => Object, registerPatchFn?: Regist
 
     isImmediateUpdateExpired = true
   })
+
+  if (callbacks?.onTrack) thisEffect.onTrack = callbacks.onTrack
 
   // 立刻 run，建立 reactiveData 和 effect
   thisEffect.run()

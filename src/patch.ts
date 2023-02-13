@@ -61,7 +61,7 @@ export function patchPoint(fn: Function, indexNos?: any) {
                 collectCause(computed, cause)
             }
         } else {
-            // debugger
+            // 这里可能是新建立的 reactive data，没有被任何 computed 依赖过，虽然有 patchPoint，但没有 relateComputed。
         }
         // 这个 trackCause 是因为 函数执行的时候还是会正常引起 effect 变换。effect 可以根据有没有这个值来判断是不是全部都能走 patch fn。
         trackCause(cause)
@@ -153,22 +153,24 @@ interface CollectionType {
  * 如果是自定义对象，要求对象必须实现 iterate(start, end) 方法。用来实现新增 track。
  * 要求所有 mutate 方法必须告诉框架新插入的节点是？删除的节点是？这样才能做到 track/untrack。
  */
-function iterateWithTrackInfo(collection: CollectionType, fromTo = [], handle: Function, trackInfoCallback: Function) {
+function iterateWithTrackInfo(collection: CollectionType, fromTo = [], handle: Function, trackInfoCallback: Function, prev?: any) {
     const trackFrame = createTrackFrame()
 
     const { next } = collection.iterator(fromTo[0], fromTo[1])
     let iterateDone = false
+    let prevItem: any = prev
     while(!iterateDone) {
         trackFrame.start()
         let { value: item, done} = next()
         // 可能一上来就是 done，这时 value 是 undefined
         if(item !== undefined) {
-            handle(item)
+            handle(item, prevItem)
             trackInfoCallback(item, trackFrame.end())
         } else {
             trackFrame.end()
         }
         iterateDone = done
+        prevItem = item
     }
 }
 
@@ -178,6 +180,8 @@ type PatchPointResult = {
         from? : Object,
         to? : Object,
     },
+    // 当有 added 的时候，通常会要说明 add 的节点在哪个后面
+    after?: Object,
     removed? : {
         from? : Object,
         to? : Object,
@@ -203,7 +207,7 @@ export function autorunForEach(collection: CollectionType, patchPoints = [], han
                 // 自动 track/untrack。这里要求这个 patchPoint 执行完 mutate 之后必须告诉外部新增和删除的节点？
                 // 任何 patchPointMutate 方法必须返回 { added: {from: to}, removed: {from, to}}
                 if (patchPointResult?.added) {
-                    addTrack(() => iterateWithTrackInfo(collection, [patchPointResult?.added!.from, patchPointResult?.added!.to], handle, trackInfoCallback))
+                    addTrack(() => iterateWithTrackInfo(collection, [patchPointResult?.added!.from, patchPointResult?.added!.to], handle, trackInfoCallback, patchPointResult?.after))
                 }
 
                 if (patchPointResult?.removed) {
